@@ -13,58 +13,68 @@
 namespace leveldb {
 namespace log {
 
+// 静态函数
+
 // Construct a string of the specified length made out of the supplied
 // partial string.
 static std::string BigString(const std::string& partial_string, size_t n) {
   std::string result;
   while (result.size() < n) {
-    result.append(partial_string);
+    result.append(partial_string);    // 重复添加
   }
-  result.resize(n);
+  result.resize(n);                   // 重新设置大小
   return result;
 }
 
 // Construct a string from a number
 static std::string NumberString(int n) {
   char buf[50];
-  snprintf(buf, sizeof(buf), "%d.", n);
+  snprintf(buf, sizeof(buf), "%d.", n);   // 将数字转为string
   return std::string(buf);
 }
 
 // Return a skewed potentially long string
-static std::string RandomSkewedString(int i, Random* rnd) {
+static std::string RandomSkewedString(int i, Random* rnd) {     // Random 关键在于这个函数的Skewed，能返回什么，应该是个size_t型数据
   return BigString(NumberString(i), rnd->Skewed(17));
 }
 
+
+// LogTest 测试类
+
 class LogTest {
  private:
+
+  // 继承于写文件的字符串目的
   class StringDest : public WritableFile {
    public:
     std::string contents_;
-
-    virtual Status Close() { return Status::OK(); }
+    // 申命为虚函数，可以被后续的继承
+    virtual Status Close() { return Status::OK(); }   
     virtual Status Flush() { return Status::OK(); }
     virtual Status Sync() { return Status::OK(); }
-    virtual Status Append(const Slice& slice) {
+    virtual Status Append(const Slice& slice) {         // slice 是个什么东西？ 切片，存储char*和size
       contents_.append(slice.data(), slice.size());
       return Status::OK();
     }
   };
 
+  // 继承于时序文件的字符串源
   class StringSource : public SequentialFile {
    public:
-    Slice contents_;
+    Slice contents_;          // 
     bool force_error_;
     bool returned_partial_;
+    // 构造函数
     StringSource() : force_error_(false), returned_partial_(false) { }
 
+    // Read 函数
     virtual Status Read(size_t n, Slice* result, char* scratch) {
-      ASSERT_TRUE(!returned_partial_) << "must not Read() after eof/error";
+      ASSERT_TRUE(!returned_partial_) << "must not Read() after eof/error";     // 该方式使用很有意思
 
-      if (force_error_) {
+      if (force_error_) {         // 基本无法进入
         force_error_ = false;
         returned_partial_ = true;
-        return Status::Corruption("read error");
+        return Status::Corruption("read error");    // Corruption 返回功能提示
       }
 
       if (contents_.size() < n) {
@@ -76,6 +86,7 @@ class LogTest {
       return Status::OK();
     }
 
+    // Skip函数
     virtual Status Skip(uint64_t n) {
       if (n > contents_.size()) {
         contents_.clear();
@@ -88,24 +99,29 @@ class LogTest {
     }
   };
 
+
+// 消息收集者，继承于消息
   class ReportCollector : public Reader::Reporter {
    public:
     size_t dropped_bytes_;
     std::string message_;
 
-    ReportCollector() : dropped_bytes_(0) { }
+    ReportCollector() : dropped_bytes_(0) { }               // 简短的函数可直接实现
     virtual void Corruption(size_t bytes, const Status& status) {
       dropped_bytes_ += bytes;
       message_.append(status.ToString());
     }
   };
 
+  // 上述定义的
   StringDest dest_;
   StringSource source_;
   ReportCollector report_;
   bool reading_;
-  Writer* writer_;
-  Reader* reader_;
+
+  // 读写
+  Writer* writer_;    // 和dest_绑定
+  Reader* reader_;    // 和source_， report_绑定
 
   // Record metadata for testing initial offset functionality
   static size_t initial_offset_record_sizes_[];
@@ -113,38 +129,46 @@ class LogTest {
   static int num_initial_offset_records_;
 
  public:
+ // 构造函数， new出来新的类，这样可以直接构造
   LogTest() : reading_(false),
               writer_(new Writer(&dest_)),
               reader_(new Reader(&source_, &report_, true/*checksum*/,
                       0/*initial_offset*/)) {
   }
 
+  // 析构函数，主要用于调delete等函数
   ~LogTest() {
     delete writer_;
     delete reader_;
   }
 
+  // 重新打开，先关闭，再打开
   void ReopenForAppend() {
     delete writer_;
     writer_ = new Writer(&dest_, dest_.contents_.size());
   }
 
+  // 写数据，调用基类的实现
   void Write(const std::string& msg) {
     ASSERT_TRUE(!reading_) << "Write() after starting to read";
     writer_->AddRecord(Slice(msg));
   }
 
+  // 需要被写的大小
   size_t WrittenBytes() const {
     return dest_.contents_.size();
   }
 
+  // 调用Reader中的ReadRecord， 此部分需要深入了解
   std::string Read() {
-    if (!reading_) {
+    if (!reading_) {      // reading_ == false
       reading_ = true;
       source_.contents_ = Slice(dest_.contents_);
     }
+
     std::string scratch;
     Slice record;
+
     if (reader_->ReadRecord(&record, &scratch)) {
       return record.ToString();
     } else {
@@ -152,14 +176,17 @@ class LogTest {
     }
   }
 
+  // 修改对应位数据
   void IncrementByte(int offset, int delta) {
     dest_.contents_[offset] += delta;
   }
 
+  // 修改对应位数据
   void SetByte(int offset, char new_byte) {
     dest_.contents_[offset] = new_byte;
   }
 
+  // 减少数据长度
   void ShrinkSize(int bytes) {
     dest_.contents_.resize(dest_.contents_.size() - bytes);
   }
@@ -179,10 +206,12 @@ class LogTest {
     return report_.dropped_bytes_;
   }
 
+  // 报告消息
   std::string ReportMessage() const {
     return report_.message_;
   }
 
+  // 匹配错误消息
   // Returns OK iff recorded error message contains "msg"
   std::string MatchError(const std::string& msg) const {
     if (report_.message_.find(msg) == std::string::npos) {
@@ -192,6 +221,7 @@ class LogTest {
     }
   }
 
+  // 创建数据，并写入
   void WriteInitialOffsetLog() {
     for (int i = 0; i < num_initial_offset_records_; i++) {
       std::string record(initial_offset_record_sizes_[i],
@@ -200,11 +230,13 @@ class LogTest {
     }
   }
 
+  // 重创reader，并进行偏移读操作
   void StartReadingAt(uint64_t initial_offset) {
     delete reader_;
     reader_ = new Reader(&source_, &report_, true/*checksum*/, initial_offset);
   }
 
+  // 测试用例 返回无记录
   void CheckOffsetPastEndReturnsNoRecords(uint64_t offset_past_end) {
     WriteInitialOffsetLog();
     reading_ = true;
@@ -217,6 +249,7 @@ class LogTest {
     delete offset_reader;
   }
 
+  // 测试用例
   void CheckInitialOffsetRecord(uint64_t initial_offset,
                                 int expected_record_offset) {
     WriteInitialOffsetLog();
@@ -242,6 +275,9 @@ class LogTest {
   }
 };
 
+
+
+// 测试参数
 size_t LogTest::initial_offset_record_sizes_[] =
     {10000,  // Two sizable records in first block
      10000,
@@ -267,6 +303,9 @@ uint64_t LogTest::initial_offset_last_record_offsets_[] =
 int LogTest::num_initial_offset_records_ =
     sizeof(LogTest::initial_offset_last_record_offsets_)/sizeof(uint64_t);
 
+
+
+// 单元测试样例，输入输出的比对
 TEST(LogTest, Empty) {
   ASSERT_EQ("EOF", Read());
 }
